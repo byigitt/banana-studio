@@ -12,7 +12,7 @@ const { build } = req('esbuild');
 
 const stubs = {
   '/authService': 'export const logUsage=()=>{};export const supabase={auth:{getSession:async()=>({data:{session:{access_token:"t",user:{id:"u1"}}}})}};',
-  '/storageService': 'export const uploadBase64ToPublicUrl=async()=>"https://cdn.example/ref.jpg";export const uploadBlobToPublicUrl=async()=>"https://cdn.example/a.mp3";export const uploadVideoBlobToPublicUrl=async()=>"https://cdn.example/v.mp4";export const refreshMediaAccessUrl=async u=>u;',
+  '/storageService': 'export const uploadBase64ToPublicUrl=async()=>{globalThis.__imageUploads=(globalThis.__imageUploads||0)+1;return globalThis.__imageUploadOk===false?null:"https://cdn.example/ref.jpg";};export const uploadBlobToPublicUrl=async()=>"https://cdn.example/a.mp3";export const uploadVideoBlobToPublicUrl=async()=>"https://cdn.example/v.mp4";export const refreshMediaAccessUrl=async u=>u;',
   '/providerRouting': 'export const selectProvider=async()=>"evolink";',
 };
 const compiled = await build({ entryPoints: ['./src/services/runwayService.ts'], absWorkingDir: root, bundle: true, write: false, format: 'cjs', platform: 'node', logLevel: 'silent',
@@ -36,10 +36,10 @@ globalThis.fetch = async (url, init) => {
   sent.push(url); return new Response(JSON.stringify({ taskId: 't1' }), { status: 200 });
 };
 
-const config = audioUrl => ({
+const config = (audioUrl, withImage = false) => ({
   mode: 'video', prompt: 'Make the sky stormy', count: 1, imageModel: 'gpt-image-2.5-sunburst', aspectRatio: '1:1', resolution: '1K',
   videoModel: 'seedance-2.5', videoOperation: 'edit', videoAspectRatio: 'adaptive', videoQuality: '720p', videoDuration: -1, audioEnabled: false,
-  videoPromptExpansionMode: 'disabled', referenceImages: [],
+  videoPromptExpansionMode: 'disabled', referenceImages: withImage ? [{ id: 'i1', data: 'data:image/png;base64,iVBORw0KGgo=', mimeType: 'image/png' }] : [],
   referenceVideos: [{ id: 'v1', url: 'https://cdn.example/src.mp4', mimeType: 'video/mp4', duration: 10, width: 3840, height: 2160 }],
   referenceAudios: audioUrl ? [{ id: 'a1', url: audioUrl, mimeType: 'audio/mpeg', duration: 10 }] : [],
 });
@@ -64,4 +64,20 @@ test('control: a valid reference audio passes the check and the scale job is sub
   try { await createVideoTask(config('https://cdn.example/a.mp3'), { id: 'g3' }); } catch (e) { error = e; }
   assert.doesNotMatch(error?.message ?? '', /reference audio/);
   assert.equal(scaleSubmits, 1);
+});
+
+test('an unloadable reference image is rejected before the paid source-video scale job is submitted', async () => {
+  scaleSubmits = 0; globalThis.__imageUploadOk = false;
+  let error;
+  try { await createVideoTask(config(null, true), { id: 'g4' }); } catch (e) { error = e; }
+  globalThis.__imageUploadOk = true;
+  assert.match(error?.message ?? '', /reference image could not be loaded/);
+  assert.equal(scaleSubmits, 0, 'no paid scale job is submitted');
+});
+
+test('control: a loadable reference image is uploaded once and the scale job is submitted', async () => {
+  scaleSubmits = 0; globalThis.__imageUploads = 0;
+  try { await createVideoTask(config(null, true), { id: 'g5' }); } catch {}
+  assert.equal(scaleSubmits, 1);
+  assert.equal(globalThis.__imageUploads, 1);
 });

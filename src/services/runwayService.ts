@@ -613,14 +613,15 @@ export const remapVideoReferencesForRequest = (
   });
 };
 
-const buildImageUrls = async (refs: ReferenceImage[], mode: EvoMode): Promise<string[]> => {
+const buildImageUrls = async (refs: ReferenceImage[], mode: EvoMode, resolved = new Map<ReferenceImage, string>()): Promise<string[]> => {
   const urls: string[] = [];
   const inputs = mode === 'image_to_video'
     ? [refs.find(r => r.isFirstFrame), refs.find(r => r.isLastFrame)].filter((ref): ref is ReferenceImage => !!ref)
     : refs;
   for (const ref of inputs) {
-    const u = await resolveImageUrl(ref);
+    const u = resolved.get(ref) ?? await resolveImageUrl(ref);
     if (!u) throw new Error('A reference image could not be loaded. Restore it before generating so person identities stay correctly matched.');
+    resolved.set(ref, u);
     urls.push(u);
   }
   return urls;
@@ -933,6 +934,10 @@ export const createVideoTask = async (
     resolveReferenceMediaUrl(a.url, a.mimeType, `reference audio ${i + 1}`, 'vref_audio', 'mp3', 'audio', 2, maximumReferenceDuration)
   ));
 
+  // Reference images that fail to load are found the same way, before the paid scaling.
+  const resolvedImages = new Map<ReferenceImage, string>();
+  await buildImageUrls(referenceImages, determineMode(referenceImages, refVids, refAudios, videoOperation), resolvedImages);
+
   const preparedVideos = await prepareReferenceVideos(
     refVids,
     videoAspectRatio,
@@ -961,7 +966,7 @@ export const createVideoTask = async (
     const error = getSeedanceFrameError(requestReferenceImages, preparedVideos.requestVideos.length, refAudios.length, videoOperation);
     if (error) throw new Error(error);
   }
-  const imageUrls = await buildImageUrls(requestReferenceImages, mode);
+  const imageUrls = await buildImageUrls(requestReferenceImages, mode, resolvedImages);
   const videoUrls = preparedVideos.requestVideos.map(v => v.url);
   const resolvedReferenceVideos = preparedVideos.persistedVideos;
   const resolvedReferenceAudios = refAudios.map((a, i) => ({ ...a, url: audioUrls[i] }));
